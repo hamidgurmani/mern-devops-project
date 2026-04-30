@@ -7,8 +7,10 @@ spec:
   project: default
   source:
     repoURL: https://github.com/hamidgurmani/mern-devops-project.git
-    targetRevision: main
+    targetRevision: HEAD
     path: k8s
+    directory:
+      recurse: true
   destination:
     server: https://kubernetes.default.svc
     namespace: mern-app
