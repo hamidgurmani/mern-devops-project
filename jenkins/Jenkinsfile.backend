@@ -1,0 +1,104 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKERHUB_CREDENTIALS = credentials('dockerhub-credentials')
+        IMAGE_NAME = 'hamid009/mern-backend'
+        IMAGE_TAG = "${BUILD_NUMBER}"
+        SONAR_PROJECT_KEY = 'mern-backend'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                echo 'Checking out source code...'
+                checkout scm
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                dir('application/backend') {
+                    withSonarQubeEnv('SonarQube') {
+                        sh """
+                            ${tool 'SonarScanner'}/bin/sonar-scanner \
+                            -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                            -Dsonar.projectName='MERN Backend' \
+                            -Dsonar.sources=. \
+                            -Dsonar.exclusions=node_modules/**
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('OWASP Dependency Check') {
+            steps {
+                dir('application/backend') {
+                    dependencyCheck additionalArguments: '''
+                        --scan .
+                        --format HTML
+                        --format XML
+                        --out ./dependency-check-report
+                        --disableNodeAudit false
+                    ''', odcInstallation: 'OWASP-DC'
+                    dependencyCheckPublisher pattern: 'dependency-check-report/dependency-check-report.xml'
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                dir('application/backend') {
+                    sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
+                    sh "docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest"
+                }
+            }
+        }
+
+        stage('Push to DockerHub') {
+            steps {
+                sh """
+                    echo ${DOCKERHUB_CREDENTIALS_PSW} | docker login -u ${DOCKERHUB_CREDENTIALS_USR} --password-stdin
+                    docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                    docker push ${IMAGE_NAME}:latest
+                """
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                withKubeConfig([credentialsId: 'kubeconfig']) {
+                    sh """
+                        kubectl set image deployment/mern-backend \
+                        mern-backend=${IMAGE_NAME}:${IMAGE_TAG} \
+                        -n mern-app
+                        kubectl rollout status deployment/mern-backend -n mern-app
+                    """
+                }
+            }
+        }
+
+        stage('Cleanup') {
+            steps {
+                sh """
+                    docker rmi ${IMAGE_NAME}:${IMAGE_TAG} || true
+                    docker rmi ${IMAGE_NAME}:latest || true
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Backend pipeline SUCCESS - Image: ${IMAGE_NAME}:${IMAGE_TAG}"
+        }
+        failure {
+            echo "❌ Backend pipeline FAILED - Check logs above"
+        }
+        always {
+            echo "Pipeline finished - Build #${BUILD_NUMBER}"
+        }
+    }
+}
