@@ -1,0 +1,113 @@
+name: Frontend CI Pipeline
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'application/frontend/**'
+      - '.github/workflows/frontend-ci.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'application/frontend/**'
+
+env:
+  IMAGE_NAME: hamid009/mern-frontend
+
+jobs:
+  sonarcloud:
+    name: SonarCloud Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          projectBaseDir: application/frontend
+          args: >
+            -Dsonar.projectKey=${{ secrets.SONAR_FRONTEND_PROJECT_KEY }}
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+            -Dsonar.projectName=mern-frontend
+            -Dsonar.sources=src
+            -Dsonar.exclusions=node_modules/**
+
+  owasp:
+    name: OWASP Dependency Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run OWASP Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: mern-frontend
+          path: application/frontend
+          format: HTML
+          args: >
+            --enableRetired
+
+      - name: Upload OWASP Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: owasp-frontend-report
+          path: reports/
+
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: [sonarcloud, owasp]
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        run: echo "version=${{ github.run_number }}" >> $GITHUB_OUTPUT
+
+      - name: Build and Push
+        uses: docker/build-push-action@v5
+        with:
+          context: application/frontend
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.run_number }}
+            ${{ env.IMAGE_NAME }}:latest
+
+  update-k8s-manifest:
+    name: Update K8s Manifest
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GIT_TOKEN }}
+
+      - name: Update frontend image tag
+        run: |
+          sed -i "s|image: hamid009/mern-frontend:.*|image: hamid009/mern-frontend:${{ github.run_number }}|g" \
+            k8s/frontend/deployment.yaml
+          cat k8s/frontend/deployment.yaml | grep image
+
+      - name: Commit and push manifest
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add k8s/frontend/deployment.yaml
+          git commit -m "CI: update frontend image to build ${{ github.run_number }}"
+          git push
