@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: mern-frontend
-          image: hamid009/mern-frontend:latest
+          image: hamid009/mern-frontend:3
           imagePullPolicy: Always
           ports:
             - containerPort: 80
