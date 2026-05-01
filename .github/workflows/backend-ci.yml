@@ -62,8 +62,6 @@ jobs:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
     needs: [sonarcloud, owasp]
-    outputs:
-      image_tag: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -75,10 +73,6 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        run: echo "version=${{ github.run_number }}" >> $GITHUB_OUTPUT
 
       - name: Build and Push
         uses: docker/build-push-action@v5
@@ -102,7 +96,7 @@ jobs:
         run: |
           sed -i "s|image: hamid009/mern-backend:.*|image: hamid009/mern-backend:${{ github.run_number }}|g" \
             k8s/backend/deployment.yaml
-          cat k8s/backend/deployment.yaml | grep image
+          grep image k8s/backend/deployment.yaml
 
       - name: Commit and push manifest
         run: |
